@@ -1,48 +1,85 @@
-from pulp import *
+import pulp
 import numpy as np
 
-def shipment(costs, smax, dmax):
-    prob = LpProblem("Shipment", LpMinimize)
-    x = np.array([LpVariable('x' + str(i) + str(j), 0, None)
-         for i in range(costs.shape[0]) for j in range(costs.shape[1])])
-    x = x.reshape(costs.shape)
-    prob += np.sum(costs * x), 'Total Cost'
-    
-    for i in range(len(smax)):
-        prob += np.sum(x[i]) <= smax[i], "Supply Constraint " + str(i)
-    for i in range(len(dmax)):
-        prob += np.sum(x.T[i]) >= dmax[i], "Demand " + str(i)
-    return prob
-    
-def transshipment(costs_to, costs_from, smax, dmax):
-    prob = LpProblem("Transshipment", LpMinimize)
-    x_to = np.array([LpVariable('xt' + str(i) + str(j), 0, None)
-         for i in range(costs_to.shape[0]) for j in range(costs_to.shape[1])])
-    x_to = x_to.reshape(costs_to.shape)
-    x_from = np.array([LpVariable('xf' + str(i) + str(j), 0, None)
-         for i in range(costs_from.shape[0]) for j in range(costs_from.shape[1])])
-    x_from = x_from.reshape(costs_from.shape)
-    prob += np.sum(costs_to * x_to) + np.sum(costs_from * x_from), 'Total Cost'
-    
-    for i in range(len(smax)):
-        prob += np.sum(x_to[i]) <= smax[i], "Supply Constraint " + str(i)
-    for i in range(len(dmax)):
-        prob += np.sum(x_from.T[i]) >= dmax[i], "Demand " + str(i)
-    for i in range(int(costs_to.shape[1])):
-        prob += np.sum(x_to.T[i]) - np.sum(x_from[i]) == 0, "Trans " + str(i)
-        
-    return prob
-    
-ct = np.array(
-    [[7.33, 6.59],
-    [9.29, 8.87],
-    [9.11, 5.41]])
-    
-cf = np.array(
-    [[3.49, 9.41, 8.81],
-    [4.63, 8.77, 8.63]])
+class SupplyChain(object):
+    def __init__(self, name, sense=pulp.LpMinimize):
+        self.name = name
+        self.network = {}
+        self.prob = pulp.LpProblem(name, sense)
+    def get_layers(self):
+        return self.network.keys()
+    def add_layer(self, layer):
+        if layer in self.network:
+            raise DuplicateLayerException
+        self.network[layer] = []
+    def connect_layers(self, fr, to, costs):
+        """Use np.inf in costs to kill an arc"""
+        #TODO: Test
+        self.network[fr].append(to) 
+        arcs = np.array([pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
+            for i in range(costs.shape[0]) for j in range(costs.shape[1])])
+        arcs = arcs.reshape(costs.shape)
 
-smax = [83, 127, 179]
-dmax = [130, 129, 130]
+        self.prob += self.prob.objective + np.sum(costs * arcs), 'Total Cost'
+        fr.add_out_arcs(arcs)
+        to.add_in_arcs(arcs)
+    def _build_constraints(self):
+        for layer in self.network.keys():
+            for cons in layer.get_constraints():
+                self.prob.addConstraint(cons)
+    def _solve(self):
+        if self.prob.status < 0:
+            print("Problem could not be solved")
+            return
+        if self.prob.status == 0:
+            print("Solving problem")
+            self._build_constraints()
+            self.prob.solve()
+    def get_cost(self):
+        self._solve()
+        return pulp.value(self.prob.objective)
 
-z = transshipment(ct, cf, smax, dmax)
+    def print_arc_value(self):
+        self._solve()
+        for var in self.prob.variables():
+            print("{} = {}".format(var.name, var.varValue))
+
+class ChainLayer(object):
+    def __init__(self, name, constraints):
+        self.name = name + '_'
+        self.constraints = constraints
+        self.size = len(constraints)
+    def add_in_arcs(self, arcs):
+        self.in_arcs = arcs
+    def add_out_arcs(self, arcs):
+        self.out_arcs = arcs
+    def get_input_totals(self):
+        return np.sum(self.in_arcs, 0)
+    def get_output_totals(self):
+        return np.sum(self.out_arcs, 1)
+
+class SupplyLayer(ChainLayer):
+    def get_constraints(self):
+        if len(self.get_output_totals()) != self.size:
+            raise DimensionMismatchException
+        return (pulp.LpConstraint(self.get_output_totals()[i],sense=-1,
+            rhs=cons, name = self.name + str(i + 1))
+            for i, cons in enumerate(self.constraints))
+
+class DemandLayer(ChainLayer):
+    def get_constraints(self):
+        if len(self.get_input_totals()) != self.size:
+            raise DimensionMismatchException
+        return (pulp.LpConstraint(self.get_input_totals()[i],sense=1,
+            rhs=cons, name = self.name + str(i + 1))
+            for i, cons in enumerate(self.constraints))
+
+class TransshipmentLayer(ChainLayer):
+    def __init__(self, name):
+        self.name = name + '_'
+    def get_constraints(self):
+        if len(self.get_input_totals()) != len(self.get_output_totals()):
+            raise DimensionMismatchException
+        return (pulp.LpConstraint(self.get_input_totals()[i] - self.get_output_totals()[i],
+                sense=0, rhs=0, name = self.name + str(i + 1))
+                for i in range(len(self.get_input_totals())))
