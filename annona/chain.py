@@ -15,7 +15,7 @@ class SupplyChain(object):
         if layer in self.network:
             print('WARNING: Layer {} already in this chain.' + 
             'Old layer has been overwritten'.format(layer.name))
-        self.network[layer] = []
+        self.network[layer] = {}
         layer._attach_to_chain(self)
     def connect_layers(self, fr, to, costs):
         """Draws arcs between from and to layers. Automatically creates
@@ -26,18 +26,23 @@ class SupplyChain(object):
             raise LayerNotAttachedException(fr, self)
         if to not in self.network:
             raise LayerNotAttachedException(to, self)
-        self.network[fr].append(to) 
-        arcs = np.array([pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
-            for i in range(costs.shape[0]) for j in range(costs.shape[1])])
-        arcs = arcs.reshape(costs.shape)
+        arcs = [pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
+            for i in range(costs.shape[0]) for j in range(costs.shape[1])]
+        self.prob.addVariables(arcs)
+        arcs = np.array(arcs).reshape(costs.shape)
+        self.prob.addVariables
 
-        self.prob += self.prob.objective + np.sum(costs * arcs), 'Total Cost'
+        self.network[fr][to] = np.sum(costs * arcs)
         fr.add_out_arcs(arcs)
         to.add_in_arcs(arcs)
     def _build_constraints(self):
         for layer in self.network.keys():
             for cons in layer.get_constraints():
                 if cons.name not in self.prob.constraints: self.prob.addConstraint(cons)
+    def _build_objective(self):
+        for fr in self.network:
+            for to in self.network[fr]:
+                self.prob += self.prob.objective + self.network[fr][to]
     def _solve(self):
         if self.prob.status < 0:
             print("Problem could not be solved")
@@ -45,6 +50,7 @@ class SupplyChain(object):
         if self.prob.status == 0:
             print("Solving problem")
             self._build_constraints()
+            self._build_objective()
             self.prob.solve()
     def get_cost(self):
         self._solve()
