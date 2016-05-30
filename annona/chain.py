@@ -55,7 +55,7 @@ class SupplyChain(object):
         for layer in self.link_constraints.values():
             if layer is not None:
                 for cons in layer:
-                    self.prob.addConstraint(cons)
+                    if cons.name not in self.prob.constraints: self.prob.addConstraint(cons)
     def _build_objective(self):
         for fr in self.network:
             for to in self.network[fr]:
@@ -95,7 +95,8 @@ class ChainLayer(object):
             self.pmin = pmin
             self.pmax = pmax
             if self.pmax == None: self.pmax = self.size
-            self.ys = np.array([pulp.LpVariable(self.name + '_Y' + i, 0, 1, cat=LpBinary)
+            self.ys = np.array([pulp.LpVariable(self.name + '_Y' + str(i), 0,
+                1, cat=pulp.LpBinary)
                 for i in range(self.size)])
         else:
             self.ys = np.array([1] * self.size)
@@ -125,10 +126,10 @@ class ChainLayer(object):
         return self.fixed_costs.dot(self.ys)
     def get_link_constraints(self):
         if self.fixed_locs: return None
-        return (pulp.LpConstraint(self.get_output_totals[i] - np.inf * self.ys,
-            np.sum(self.get_output_totals()) * self.ys,
-            sense=-1, rhs = 0, name=self.name + '_link') for i in
-            range(self.size))
+        return [pulp.LpConstraint(self.get_output_totals()[i] - 
+            self.constraints[i] * self.ys[i],
+            sense=-1, rhs = 0, name=self.name + '_link' + str(i)) for i in
+            range(self.size)]
 
 
 

@@ -69,3 +69,21 @@ sc2.connect_layers(trans, demand, cost_to_dc)
 
 print sc2.get_cost()
 sc2.print_arc_values()
+
+######## NERD 2
+
+sc3 = SupplyChain('NERD2')
+supply = SupplyLayer('DC', [2000] * 5, False, 1, 1, [10000] * 5)
+demand = DemandLayer('Regions', [425, 12, 43, 125, 110, 86, 129, 28, 66, 320,
+    220, 182])
+c = np.array([
+    [0, 93, 69, 98, 55, 37, 128, 95, 62, 42, 82, 34],
+    [37, 65, 33, 102, 20, 0, 137, 113, 48, 72, 79, 41],
+    [42, 106, 105, 73, 92, 72, 94, 57, 104, 0, 68, 38],
+    [82, 59, 101, 27, 93, 79, 63, 57, 127, 68, 0, 47],
+    [34, 68, 72, 66, 60, 41, 98, 71, 85, 38, 47, 0]])
+sc3.add_layer(supply)
+sc3.add_layer(demand)
+sc3.connect_layers(supply, demand, c)
+
+print sc3.get_cost()
