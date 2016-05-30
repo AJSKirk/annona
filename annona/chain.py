@@ -7,6 +7,10 @@ class SupplyChain(object):
         self.name = name
         self.network = {}
         self.prob = pulp.LpProblem(name, sense)
+        self.y_constraints = {}
+        self.fixed_costs = {}
+        self.link_constraints = {}
+        self.throughput_constraints = {}
     def get_layers(self):
         return self.network.keys()
     def add_layer(self, layer):
@@ -15,16 +19,19 @@ class SupplyChain(object):
         if layer in self.network:
             print('WARNING: Layer {} already in this chain.' + 
             'Old layer has been overwritten'.format(layer.name))
-        self.network[layer] = {}
+        self.network[layer.name] = {}
         layer._attach_to_chain(self)
+        self.y_constraints[layer.name] = (layer.get_pmin_constraint(),
+                layer.get_pmax_constraint())
+        self.fixed_costs[layer.name] = layer.get_fixed_costs()
     def connect_layers(self, fr, to, costs):
         """Draws arcs between from and to layers. Automatically creates
         decision variables and updates the total cost for the chain. Use np.inf
         in the costs matrix to delete an arc. Note that layers must be
         explicitly attached to the chain beforehand."""
-        if fr not in self.network:
+        if fr.name not in self.network:
             raise LayerNotAttachedException(fr, self)
-        if to not in self.network:
+        if to.name not in self.network:
             raise LayerNotAttachedException(to, self)
         arcs = [pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
             for i in range(costs.shape[0]) for j in range(costs.shape[1])]
@@ -32,17 +39,29 @@ class SupplyChain(object):
         arcs = np.array(arcs).reshape(costs.shape)
         self.prob.addVariables
 
-        self.network[fr][to] = np.sum(costs * arcs)
+        self.network[fr.name][to.name] = np.sum(costs * arcs)
         fr.add_out_arcs(arcs)
         to.add_in_arcs(arcs)
+        self.link_constraints[fr.name] = fr.get_link_constraints()
+        self.throughput_constraints[fr.name] = fr.get_constraints()
+        self.throughput_constraints[to.name] = to.get_constraints()
     def _build_constraints(self):
-        for layer in self.network.keys():
-            for cons in layer.get_constraints():
-                if cons.name not in self.prob.constraints: self.prob.addConstraint(cons)
+        for layer in self.throughput_constraints.values():
+            for cons in layer:
+                self.prob.addConstraint(cons)
+        for layer in self.y_constraints.values():
+            if layer[0] is not None: self.prob.addConstraint(layer[0])
+            if layer[1] is not None: self.prob.addConstraint(layer[1])
+        for layer in self.link_constraints.values():
+            if layer is not None:
+                for cons in layer:
+                    self.prob.addConstraint(cons)
     def _build_objective(self):
         for fr in self.network:
             for to in self.network[fr]:
                 self.prob += self.prob.objective + self.network[fr][to]
+        for layer in self.fixed_costs.values():
+            self.prob += self.prob.objective + layer
     def _solve(self):
         if self.prob.status < 0:
             print("Problem could not be solved")
@@ -65,11 +84,23 @@ class SupplyChain(object):
         
 class ChainLayer(object):
     """Base class for supply chain layers"""
-    def __init__(self, name, constraints):
+    def __init__(self, name, constraints, fixed_locs=True, pmin=0, pmax=None,
+            fixed_costs=None):
         self.name = name + '_'
         self.constraints = constraints
         self.size = len(constraints)
         self.chain = None
+        self.fixed_locs = fixed_locs
+        if not fixed_locs:
+            self.pmin = pmin
+            self.pmax = pmax
+            if self.pmax == None: self.pmax = self.size
+            self.ys = np.array([pulp.LpVariable(self.name + '_Y' + i, 0, 1, cat=LpBinary)
+                for i in range(self.size)])
+        else:
+            self.ys = np.array([1] * self.size)
+        if fixed_costs is None: fixed_costs = [0] * self.size
+        self.fixed_costs = np.array(fixed_costs)
     def _attach_to_chain(self, chain):
         if self.chain:
             print('WARNING: This layer already in chain {}'.format(self.chain.name))
@@ -82,6 +113,24 @@ class ChainLayer(object):
         return np.sum(self.in_arcs, 0)
     def get_output_totals(self):
         return np.sum(self.out_arcs, 1)
+    def get_pmin_constraint(self):
+        if self.fixed_locs: return None
+        return pulp.LpConstraint(np.sum(self.ys), sense=1, rhs=self.pmin,
+                name=self.name+'_Pmin')
+    def get_pmax_constraint(self):
+        if self.fixed_locs: return None
+        return pulp.LpConstraint(np.sum(self.ys), sense=-1, rhs=self.pmax,
+                name=self.name+'_Pmax')
+    def get_fixed_costs(self):
+        return self.fixed_costs.dot(self.ys)
+    def get_link_constraints(self):
+        if self.fixed_locs: return None
+        return (pulp.LpConstraint(self.get_output_totals[i] - np.inf * self.ys,
+            np.sum(self.get_output_totals()) * self.ys,
+            sense=-1, rhs = 0, name=self.name + '_link') for i in
+            range(self.size))
+
+
 
 class SupplyLayer(ChainLayer):
     """Supply layer. Takes a name and a list of constraints specifying the
