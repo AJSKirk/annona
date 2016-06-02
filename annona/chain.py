@@ -11,6 +11,7 @@ class SupplyChain(object):
         self.fixed_costs = {}
         self.link_constraints = {}
         self.throughput_constraints = {}
+        self.los_constraints = {}
         self.variables = {}
         self.clean = True
     def get_layers(self):
@@ -32,6 +33,7 @@ class SupplyChain(object):
         try:
             del self.network[layer]
             del self.variables[layer]
+            if layer in self.los_constraints: del self.los_constraints[layer]
             del self.y_constraints[layer]
             del self.fixed_costs[layer]
             for fr in self.network.values():
@@ -44,7 +46,10 @@ class SupplyChain(object):
             print('WARNING: Layer {} not in chain {}'.format(layer.name,
                 self.name))
         self.clean = False
-    def connect_layers(self, fr, to, costs):
+    def update_layer(self, layer):
+        raise NotImplemented
+    def connect_layers(self, fr, to, costs, los_metric=None, los_thresh=None,
+            los_dist=None, los_max_dist=None):
         """Draws arcs between from and to layers. Automatically creates
         decision variables and updates the total cost for the chain. Use np.inf
         in the costs matrix to delete an arc. Note that layers must be
@@ -64,11 +69,16 @@ class SupplyChain(object):
         self.link_constraints[fr] = fr.get_link_constraints()
         self.throughput_constraints[fr] = fr.get_constraints()
         self.throughput_constraints[to] = to.get_constraints()
+        if los_metric is not None:
+            self.los_constraints[fr] = los_metric(los_dist, arcs,
+                    to.total_demand, los_max_dist, los_thresh)
         self.clean = False
     def _build_constraints(self):
         for layer in self.throughput_constraints.values():
             for cons in layer:
                 self.prob.addConstraint(cons)
+        for los in self.los_constraints.values():
+            self.prob.addConstraint(los)
         for layer in self.y_constraints.values():
             if layer[0] is not None: self.prob.addConstraint(layer[0])
             if layer[1] is not None: self.prob.addConstraint(layer[1])
@@ -153,6 +163,20 @@ class ChainLayer(object):
             self.constraints[i] * self.ys[i],
             sense=-1, rhs = 0, name=self.name + '_link' + str(i)) for i in
             range(self.size)]
+    def set_ys(self, new_ys):
+        if not all(map(lambda x: x == 0 or x == 1, new_ys)):
+            raise InvalidYsError
+        if len(new_ys) != len(self.ys):
+            raise InvalidYsError
+        if sum(new_ys) > self.pmax or sum(new_ys) < self.pmin:
+            raise InvalidYsError
+        self.ys = new_ys
+        self.chain.refresh_layer(self)
+    def set_pmin(self, new_pmin):
+        self.pmin = new_pmin
+    def set_pmax(self, new_pmax):
+        self.pmax = new_pmax
+
 
 
 
@@ -175,6 +199,8 @@ class DemandLayer(ChainLayer):
         return (pulp.LpConstraint(self.get_input_totals()[i],sense=1,
             rhs=cons, name = self.name + str(i + 1))
             for i, cons in enumerate(self.constraints))
+    def total_demand(self):
+        return sum(self.constraints)
 
 class TransshipmentLayer(ChainLayer):
     """Transshipment layer. Takes a name and a list of constraints specifying

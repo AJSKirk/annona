@@ -1,2 +1,3 @@
-__all__ = ["chain"]
+__all__ = ["chain", "los"]
 import chain
+import los
