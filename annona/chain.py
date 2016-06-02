@@ -6,11 +6,13 @@ class SupplyChain(object):
     def __init__(self, name, sense=pulp.LpMinimize):
         self.name = name
         self.network = {}
-        self.prob = pulp.LpProblem(name, sense)
+        self.prob_seed = pulp.LpProblem(name, sense)
         self.y_constraints = {}
         self.fixed_costs = {}
         self.link_constraints = {}
         self.throughput_constraints = {}
+        self.variables = {}
+        self.clean = True
     def get_layers(self):
         return self.network.keys()
     def add_layer(self, layer):
@@ -19,32 +21,50 @@ class SupplyChain(object):
         if layer in self.network:
             print('WARNING: Layer {} already in this chain.' + 
             'Old layer has been overwritten'.format(layer.name))
-        self.network[layer.name] = {}
+        self.network[layer] = {}
+        self.variables[layer] = {}
         layer._attach_to_chain(self)
-        self.y_constraints[layer.name] = (layer.get_pmin_constraint(),
+        self.y_constraints[layer] = (layer.get_pmin_constraint(),
                 layer.get_pmax_constraint())
-        self.fixed_costs[layer.name] = layer.get_fixed_costs()
+        self.fixed_costs[layer] = layer.get_fixed_costs()
+        self.clean = False
+    def remove_layer(self, layer):
+        try:
+            del self.network[layer]
+            del self.variables[layer]
+            del self.y_constraints[layer]
+            del self.fixed_costs[layer]
+            for fr in self.network.values():
+                if layer in fr:
+                    del fr[layer]
+            for fr in self.variables.values():
+                if layer in fr:
+                    del fr[layer]
+        except KeyError:
+            print('WARNING: Layer {} not in chain {}'.format(layer.name,
+                self.name))
+        self.clean = False
     def connect_layers(self, fr, to, costs):
         """Draws arcs between from and to layers. Automatically creates
         decision variables and updates the total cost for the chain. Use np.inf
         in the costs matrix to delete an arc. Note that layers must be
         explicitly attached to the chain beforehand."""
-        if fr.name not in self.network:
+        if fr not in self.network:
             raise LayerNotAttachedException(fr, self)
-        if to.name not in self.network:
+        if to not in self.network:
             raise LayerNotAttachedException(to, self)
         arcs = [pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
             for i in range(costs.shape[0]) for j in range(costs.shape[1])]
-        self.prob.addVariables(arcs)
+        self.variables[fr][to] = arcs
         arcs = np.array(arcs).reshape(costs.shape)
-        self.prob.addVariables
 
-        self.network[fr.name][to.name] = np.sum(costs * arcs)
+        self.network[fr][to] = np.sum(costs * arcs)
         fr.add_out_arcs(arcs)
         to.add_in_arcs(arcs)
-        self.link_constraints[fr.name] = fr.get_link_constraints()
-        self.throughput_constraints[fr.name] = fr.get_constraints()
-        self.throughput_constraints[to.name] = to.get_constraints()
+        self.link_constraints[fr] = fr.get_link_constraints()
+        self.throughput_constraints[fr] = fr.get_constraints()
+        self.throughput_constraints[to] = to.get_constraints()
+        self.clean = False
     def _build_constraints(self):
         for layer in self.throughput_constraints.values():
             for cons in layer:
@@ -63,14 +83,17 @@ class SupplyChain(object):
         for layer in self.fixed_costs.values():
             self.prob += self.prob.objective + layer
     def _solve(self):
-        if self.prob.status < 0:
-            print("Problem could not be solved")
-            return
-        if self.prob.status == 0:
+        if self.clean == False:
+            self.prob = self.prob_seed.copy()
+            #self.prob.addVariables(self.variables)
             print("Solving problem")
             self._build_constraints()
             self._build_objective()
             self.prob.solve()
+            if self.prob.status < 0:
+                print("Problem could not be solved")
+                return
+            self.clean = True
     def get_cost(self):
         self._solve()
         return pulp.value(self.prob.objective)

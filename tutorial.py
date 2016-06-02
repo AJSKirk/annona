@@ -73,7 +73,7 @@ sc2.print_arc_values()
 ######## NERD 2
 
 sc3 = SupplyChain('NERD2')
-supply = SupplyLayer('DC', [2000] * 5, False, 1, 1, [10000] * 5)
+supply = SupplyLayer('DC', [2000] * 5, False, 3, 3, [10000] * 5)
 demand = DemandLayer('Regions', [425, 12, 43, 125, 110, 86, 129, 28, 66, 320,
     220, 182])
 c = np.array([
