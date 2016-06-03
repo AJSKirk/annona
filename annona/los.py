@@ -1,10 +1,8 @@
 import pulp
 import numpy as np
 
-def WeightedAvgDist(dist, xs, total_demand, max_dist=None, thresh=None):
-    return pulp.LpConstraint(np.sum(dist * arcs) / total_demand, sense=-1,
-            rhs=thresh)
+def WeightedAvgDist(demand):
+    return np.sum(demand.get_dist() * demand.get_arcs()) / demand.total_demand()
 
-def PctInDist(dists, xs, total_demand, max_dist, thresh=None):
-    return pulp.LpConstraint(((dists <= max_dist) * xs) / total_demand,
-            sense=1, rhs=thresh)
+def PctInDist(demand, max_dist):
+    return np.sum((demand.get_dist() <= max_dist) * demand.get_in_arcs()) / demand.total_demand()

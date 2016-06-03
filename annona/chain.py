@@ -7,13 +7,13 @@ class SupplyChain(object):
         self.name = name
         self.network = {}
         self.prob_seed = pulp.LpProblem(name, sense)
-        self.y_constraints = {}
+        self.clean = True
+        self.variables = {}
+
         self.fixed_costs = {}
         self.link_constraints = {}
         self.throughput_constraints = {}
         self.los_constraints = {}
-        self.variables = {}
-        self.clean = True
     def get_layers(self):
         return self.network.keys()
     def add_layer(self, layer):
@@ -25,16 +25,12 @@ class SupplyChain(object):
         self.network[layer] = {}
         self.variables[layer] = {}
         layer._attach_to_chain(self)
-        self.y_constraints[layer] = (layer.get_pmin_constraint(),
-                layer.get_pmax_constraint())
         self.fixed_costs[layer] = layer.get_fixed_costs()
         self.clean = False
     def remove_layer(self, layer):
         try:
             del self.network[layer]
             del self.variables[layer]
-            if layer in self.los_constraints: del self.los_constraints[layer]
-            del self.y_constraints[layer]
             del self.fixed_costs[layer]
             for fr in self.network.values():
                 if layer in fr:
@@ -48,8 +44,7 @@ class SupplyChain(object):
         self.clean = False
     def update_layer(self, layer):
         raise NotImplemented
-    def connect_layers(self, fr, to, costs, los_metric=None, los_thresh=None,
-            los_dist=None, los_max_dist=None):
+    def connect_layers(self, fr, to, costs, dist=None):
         """Draws arcs between from and to layers. Automatically creates
         decision variables and updates the total cost for the chain. Use np.inf
         in the costs matrix to delete an arc. Note that layers must be
@@ -60,32 +55,24 @@ class SupplyChain(object):
             raise LayerNotAttachedException(to, self)
         arcs = [pulp.LpVariable("{}{}->{}{}".format(fr.name,i+1,to.name,j + 1),0,None)
             for i in range(costs.shape[0]) for j in range(costs.shape[1])]
-        self.variables[fr][to] = arcs
         arcs = np.array(arcs).reshape(costs.shape)
+
+        self.variables[fr][to] = arcs
 
         self.network[fr][to] = np.sum(costs * arcs)
         fr.add_out_arcs(arcs)
         to.add_in_arcs(arcs)
-        self.link_constraints[fr] = fr.get_link_constraints()
-        self.throughput_constraints[fr] = fr.get_constraints()
-        self.throughput_constraints[to] = to.get_constraints()
-        if los_metric is not None:
-            self.los_constraints[fr] = los_metric(los_dist, arcs,
-                    to.total_demand, los_max_dist, los_thresh)
+        to.add_dist(dist)
         self.clean = False
     def _build_constraints(self):
-        for layer in self.throughput_constraints.values():
-            for cons in layer:
-                self.prob.addConstraint(cons)
-        for los in self.los_constraints.values():
-            self.prob.addConstraint(los)
-        for layer in self.y_constraints.values():
-            if layer[0] is not None: self.prob.addConstraint(layer[0])
-            if layer[1] is not None: self.prob.addConstraint(layer[1])
-        for layer in self.link_constraints.values():
-            if layer is not None:
-                for cons in layer:
-                    if cons.name not in self.prob.constraints: self.prob.addConstraint(cons)
+        for layer in self.network.keys():
+            for cons in layer.get_constraints(): self.prob.addConstraint(cons)
+            if layer.get_pmin_constraint(): self.prob.addConstraint(layer.get_pmin_constraint())
+            if layer.get_pmax_constraint(): self.prob.addConstraint(layer.get_pmax_constraint())
+            if layer.get_link_constraints():
+                for cons in layer.get_link_constraints(): self.prob.addConstraint(cons)
+            if layer.get_los_constraints():
+                for cons in layer.get_los_constraints(): self.prob.addConstraint(cons)
     def _build_objective(self):
         for fr in self.network:
             for to in self.network[fr]:
@@ -123,6 +110,7 @@ class ChainLayer(object):
         self.constraints = constraints
         self.size = len(constraints)
         self.chain = None
+        self.los_constraints = []
         self.fixed_locs = fixed_locs
         if not fixed_locs:
             self.pmin = pmin
@@ -143,10 +131,21 @@ class ChainLayer(object):
         self.in_arcs = arcs
     def add_out_arcs(self, arcs):
         self.out_arcs = arcs
+    def get_in_arcs(self):
+        return self.in_arcs
+    def add_dist(self, dist):
+        if dist is None: return
+        if dist.shape != self.in_arcs.shape:
+            raise DimensionMismatchException
+        self.dist = dist
+    def get_dist(self):
+        return self.dist
     def get_input_totals(self):
         return np.sum(self.in_arcs, 0)
     def get_output_totals(self):
         return np.sum(self.out_arcs, 1)
+    def get_los_constraints(self):
+        pass
     def get_pmin_constraint(self):
         if self.fixed_locs: return None
         return pulp.LpConstraint(np.sum(self.ys), sense=1, rhs=self.pmin,
@@ -201,6 +200,15 @@ class DemandLayer(ChainLayer):
             for i, cons in enumerate(self.constraints))
     def total_demand(self):
         return sum(self.constraints)
+    def add_los_constraint(self, thresh, constraint_fn, *args):
+        # TODO: Make this better with some FP
+        if constraint_fn.__name__ == 'PctInDist':
+            sense = 1
+        else:
+            sense = -1
+        self.los_constraints.append(pulp.LpConstraint(constraint_fn(self,*args), sense=sense, rhs=thresh))
+    def get_los_constraints(self):
+        return self.los_constraints
 
 class TransshipmentLayer(ChainLayer):
     """Transshipment layer. Takes a name and a list of constraints specifying
