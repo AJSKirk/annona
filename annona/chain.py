@@ -159,7 +159,7 @@ class ChainLayer(object):
     def get_link_constraints(self):
         if self.fixed_locs: return None
         return [pulp.LpConstraint(self.get_output_totals()[i] - 
-            self.constraints[i] * self.ys[i],
+            max(self.constraints[i], 10000000000000) * self.ys[i],
             sense=-1, rhs = 0, name=self.name + '_link' + str(i)) for i in
             range(self.size)]
     def set_ys(self, new_ys):
@@ -200,13 +200,20 @@ class DemandLayer(ChainLayer):
             for i, cons in enumerate(self.constraints))
     def total_demand(self):
         return sum(self.constraints)
-    def add_los_constraint(self, thresh, constraint_fn, *args):
+    def add_los_constraint(self, thresh, constraint_fn):
         # TODO: Make this better with some FP
         if constraint_fn.__name__ == 'PctInDist':
             sense = 1
         else:
             sense = -1
-        self.los_constraints.append(pulp.LpConstraint(constraint_fn(self,*args), sense=sense, rhs=thresh))
+        self.los_constraints.append(pulp.LpConstraint(constraint_fn(self), sense=sense, rhs=thresh))
+    def los(self, thresh, constraint_fn):
+        # TODO: Make this better with some FP
+        if constraint_fn.__name__ == 'PctInDist':
+            sense = 1
+        else:
+            sense = -1
+        print(pulp.value(constraint_fn(self)))
     def get_los_constraints(self):
         return self.los_constraints
 
