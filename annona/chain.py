@@ -93,12 +93,19 @@ class SupplyChain(object):
             self.clean = True
     def get_cost(self):
         self._solve()
+        if self.prob.status < 0:
+            return None
         return pulp.value(self.prob.objective)
     def get_arc_values(self):
+        self._solve()
+        if self.prob.status < 0:
+            return None
         return dict([(var.name, var.varValue)
             for var in self.prob.variables])
     def print_arc_values(self):
         self._solve()
+        if self.prob.status < 0:
+            return None
         for var in self.prob.variables():
             print("{} = {}".format(var.name, var.varValue))
         
@@ -159,7 +166,7 @@ class ChainLayer(object):
     def get_link_constraints(self):
         if self.fixed_locs: return None
         return [pulp.LpConstraint(self.get_output_totals()[i] - 
-            max(self.constraints[i], 10000000000000) * self.ys[i],
+            max(self.constraints[i], 10000000000000000) * self.ys[i],
             sense=-1, rhs = 0, name=self.name + '_link' + str(i)) for i in
             range(self.size)]
     def set_ys(self, new_ys):
@@ -200,20 +207,19 @@ class DemandLayer(ChainLayer):
             for i, cons in enumerate(self.constraints))
     def total_demand(self):
         return sum(self.constraints)
-    def add_los_constraint(self, thresh, constraint_fn):
+    def add_los_constraint(self, thresh, constraint_fn, *cons_args):
         # TODO: Make this better with some FP
         if constraint_fn.__name__ == 'PctInDist':
             sense = 1
         else:
             sense = -1
-        self.los_constraints.append(pulp.LpConstraint(constraint_fn(self), sense=sense, rhs=thresh))
-    def los(self, thresh, constraint_fn):
+        self.los_constraints.append(pulp.LpConstraint(constraint_fn(self, *cons_args),
+            sense=sense, rhs=thresh, name='{}_LOS_{}'.format(self.name,
+                len(self.los_constraints))))
+    #TODO: Make multi-naming work
+    def los(self, constraint_fn, *cons_args):
         # TODO: Make this better with some FP
-        if constraint_fn.__name__ == 'PctInDist':
-            sense = 1
-        else:
-            sense = -1
-        print(pulp.value(constraint_fn(self)))
+        print(pulp.value(constraint_fn(self, *cons_args)))
     def get_los_constraints(self):
         return self.los_constraints
 
@@ -229,10 +235,10 @@ class TransshipmentLayer(ChainLayer):
             raise DimensionMismatchException(len(self.get_input_totals()), self.size)
         for i in range(self.size):
             yield pulp.LpConstraint(self.get_input_totals()[i] - self.get_output_totals()[i],
-                    sense=0, rhs=0, name = self.name + str(i + 1))
+                    sense=0, rhs=0, name = self.name + str(i + 1) +  '_Clear')
         for i, cons in enumerate(self.constraints):
             if cons:
-                yield pulp.LpConstraint(self.get_input_totals()[i],sense=1,
+                yield pulp.LpConstraint(self.get_input_totals()[i],sense=-1,
                     rhs=cons, name = self.name + str(i + 1))
 
 class LayerNotAttachedException(Exception):
